@@ -10,13 +10,17 @@ This module tests:
 - Worker integration: model runner resolved via platform hook
 """
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
+from vllm_omni.diffusion import registry
 from vllm_omni.diffusion.registry import (
     _DIFFUSION_MODELS,
+    _DIFFUSION_POST_PROCESS_FUNC_MODULES,
     _DIFFUSION_POST_PROCESS_FUNCS,
+    _DIFFUSION_PRE_PROCESS_FUNC_MODULES,
     _DIFFUSION_PRE_PROCESS_FUNCS,
     register_diffusion_model,
 )
@@ -59,6 +63,8 @@ class TestRegisterDiffusionModel:
         original_models = _DIFFUSION_MODELS.copy()
         original_pre = _DIFFUSION_PRE_PROCESS_FUNCS.copy()
         original_post = _DIFFUSION_POST_PROCESS_FUNCS.copy()
+        original_pre_modules = _DIFFUSION_PRE_PROCESS_FUNC_MODULES.copy()
+        original_post_modules = _DIFFUSION_POST_PROCESS_FUNC_MODULES.copy()
         yield
         _DIFFUSION_MODELS.clear()
         _DIFFUSION_MODELS.update(original_models)
@@ -66,6 +72,10 @@ class TestRegisterDiffusionModel:
         _DIFFUSION_PRE_PROCESS_FUNCS.update(original_pre)
         _DIFFUSION_POST_PROCESS_FUNCS.clear()
         _DIFFUSION_POST_PROCESS_FUNCS.update(original_post)
+        _DIFFUSION_PRE_PROCESS_FUNC_MODULES.clear()
+        _DIFFUSION_PRE_PROCESS_FUNC_MODULES.update(original_pre_modules)
+        _DIFFUSION_POST_PROCESS_FUNC_MODULES.clear()
+        _DIFFUSION_POST_PROCESS_FUNC_MODULES.update(original_post_modules)
 
     def test_register_new_model(self):
         """Test registering a new diffusion model with pre/post process functions."""
@@ -85,6 +95,96 @@ class TestRegisterDiffusionModel:
         assert _DIFFUSION_PRE_PROCESS_FUNCS["TestPipeline"] == "test_pre_process"
         assert _DIFFUSION_POST_PROCESS_FUNCS["TestPipeline"] == "test_post_process"
 
+    def test_replacing_builtin_model_keeps_builtin_process_funcs(self, monkeypatch):
+        """Test replacing a built-in model keeps its pre/post process functions."""
+        builtin_module_name = "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2"
+        plugin_module_name = "test_plugin.diffusion.pipeline"
+        od_config = SimpleNamespace(model_class_name="WanPipeline")
+        imported_modules = []
+
+        def builtin_pre_process(config):
+            return ("builtin_pre", config)
+
+        def builtin_post_process(config):
+            return ("builtin_post", config)
+
+        builtin_module = SimpleNamespace(
+            get_wan22_pre_process_func=builtin_pre_process,
+            get_wan22_post_process_func=builtin_post_process,
+        )
+        plugin_module = SimpleNamespace()
+
+        def import_module(module_name):
+            imported_modules.append(module_name)
+            if module_name == builtin_module_name:
+                return builtin_module
+            if module_name == plugin_module_name:
+                return plugin_module
+            raise AssertionError(f"unexpected import: {module_name}")
+
+        monkeypatch.setattr(registry.importlib, "import_module", import_module)
+
+        register_diffusion_model(
+            model_arch="WanPipeline",
+            module_name=plugin_module_name,
+            class_name="PluginWanPipeline",
+        )
+
+        assert registry.get_diffusion_pre_process_func(od_config) == (
+            "builtin_pre",
+            od_config,
+        )
+        assert registry.get_diffusion_post_process_func(od_config) == (
+            "builtin_post",
+            od_config,
+        )
+        assert imported_modules == [builtin_module_name, builtin_module_name]
+
+    def test_replacing_builtin_model_uses_explicit_plugin_process_funcs(
+        self, monkeypatch
+    ):
+        """Test explicit plugin process functions override built-in entries."""
+        plugin_module_name = "test_plugin.diffusion.pipeline"
+        od_config = SimpleNamespace(model_class_name="WanPipeline")
+        imported_modules = []
+
+        def plugin_pre_process(config):
+            return ("plugin_pre", config)
+
+        def plugin_post_process(config):
+            return ("plugin_post", config)
+
+        plugin_module = SimpleNamespace(
+            plugin_pre_process=plugin_pre_process,
+            plugin_post_process=plugin_post_process,
+        )
+
+        def import_module(module_name):
+            imported_modules.append(module_name)
+            if module_name == plugin_module_name:
+                return plugin_module
+            raise AssertionError(f"unexpected import: {module_name}")
+
+        monkeypatch.setattr(registry.importlib, "import_module", import_module)
+
+        register_diffusion_model(
+            model_arch="WanPipeline",
+            module_name=plugin_module_name,
+            class_name="PluginWanPipeline",
+            pre_process_func_name="plugin_pre_process",
+            post_process_func_name="plugin_post_process",
+        )
+
+        assert registry.get_diffusion_pre_process_func(od_config) == (
+            "plugin_pre",
+            od_config,
+        )
+        assert registry.get_diffusion_post_process_func(od_config) == (
+            "plugin_post",
+            od_config,
+        )
+        assert imported_modules == [plugin_module_name, plugin_module_name]
+
 
 class TestWorkerUsesHook:
     """Test that DiffusionWorker resolves model runner via platform hook."""
@@ -93,8 +193,6 @@ class TestWorkerUsesHook:
     @patch("vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform")
     def test_model_runner_resolved_via_platform(self, mock_platform, mock_resolve):
         """Test model runner class is resolved from platform hook return value."""
-        from unittest.mock import Mock
-
         from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 
         mock_runner_instance = Mock()

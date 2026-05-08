@@ -498,6 +498,19 @@ _DIFFUSION_PRE_PROCESS_FUNCS = {
     "MagiHumanPipeline": "get_magi_human_pre_process_func",
 }
 
+_DIFFUSION_PRE_PROCESS_FUNC_MODULES: dict[str, str] = {}
+_DIFFUSION_POST_PROCESS_FUNC_MODULES: dict[str, str] = {}
+
+
+def _get_process_module_name(model_entry: tuple[str, str, str]) -> str:
+    """Return the module path that contains a model's process functions."""
+    mod_folder, mod_relname, _ = model_entry
+    if mod_relname == "":
+        # Full module path (registered via register_diffusion_model)
+        return mod_folder
+    # Built-in model (relative path convention)
+    return f"vllm_omni.diffusion.models.{mod_folder}.{mod_relname}"
+
 
 def register_diffusion_model(
     model_arch: str,
@@ -524,6 +537,8 @@ def register_diffusion_model(
             located in *module_name*.  Pass ``None`` to keep the existing
             entry when replacing a built-in model.
     """
+    original_model = _DIFFUSION_MODELS.get(model_arch)
+
     # Register model class in DiffusionModelRegistry
     DiffusionModelRegistry.register_model(
         model_arch,
@@ -538,8 +553,23 @@ def register_diffusion_model(
     # Optionally register pre/post process funcs.
     if pre_process_func_name is not None:
         _DIFFUSION_PRE_PROCESS_FUNCS[model_arch] = pre_process_func_name
+        _DIFFUSION_PRE_PROCESS_FUNC_MODULES[model_arch] = module_name
+    elif (
+        model_arch in _DIFFUSION_PRE_PROCESS_FUNCS
+        and model_arch not in _DIFFUSION_PRE_PROCESS_FUNC_MODULES
+        and original_model is not None
+    ):
+        _DIFFUSION_PRE_PROCESS_FUNC_MODULES[model_arch] = _get_process_module_name(original_model)
+
     if post_process_func_name is not None:
         _DIFFUSION_POST_PROCESS_FUNCS[model_arch] = post_process_func_name
+        _DIFFUSION_POST_PROCESS_FUNC_MODULES[model_arch] = module_name
+    elif (
+        model_arch in _DIFFUSION_POST_PROCESS_FUNCS
+        and model_arch not in _DIFFUSION_POST_PROCESS_FUNC_MODULES
+        and original_model is not None
+    ):
+        _DIFFUSION_POST_PROCESS_FUNC_MODULES[model_arch] = _get_process_module_name(original_model)
 
     logger.info(
         "Registered diffusion model %s -> %s.%s",
@@ -549,15 +579,10 @@ def register_diffusion_model(
     )
 
 
-def _load_process_func(od_config: OmniDiffusionConfig, func_name: str):
+def _load_process_func(od_config: OmniDiffusionConfig, func_name: str, module_name: str | None = None):
     """Load and return a process function from the appropriate module."""
-    mod_folder, mod_relname, _ = _DIFFUSION_MODELS[od_config.model_class_name]
-    if mod_relname == "":
-        # Full module path (registered via register_diffusion_model)
-        module_name = mod_folder
-    else:
-        # Built-in model (relative path convention)
-        module_name = f"vllm_omni.diffusion.models.{mod_folder}.{mod_relname}"
+    if module_name is None:
+        module_name = _get_process_module_name(_DIFFUSION_MODELS[od_config.model_class_name])
     module = importlib.import_module(module_name)
     func = getattr(module, func_name)
     return func(od_config)
@@ -567,11 +592,13 @@ def get_diffusion_post_process_func(od_config: OmniDiffusionConfig):
     if od_config.model_class_name not in _DIFFUSION_POST_PROCESS_FUNCS:
         return None
     func_name = _DIFFUSION_POST_PROCESS_FUNCS[od_config.model_class_name]
-    return _load_process_func(od_config, func_name)
+    module_name = _DIFFUSION_POST_PROCESS_FUNC_MODULES.get(od_config.model_class_name)
+    return _load_process_func(od_config, func_name, module_name)
 
 
 def get_diffusion_pre_process_func(od_config: OmniDiffusionConfig):
     if od_config.model_class_name not in _DIFFUSION_PRE_PROCESS_FUNCS:
         return None  # Return None if no pre-processing function is registered (for backward compatibility)
     func_name = _DIFFUSION_PRE_PROCESS_FUNCS[od_config.model_class_name]
-    return _load_process_func(od_config, func_name)
+    module_name = _DIFFUSION_PRE_PROCESS_FUNC_MODULES.get(od_config.model_class_name)
+    return _load_process_func(od_config, func_name, module_name)
