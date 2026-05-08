@@ -236,8 +236,7 @@ class FluxPipeline(nn.Module, FluxPipelineMixin, CFGParallelMixin, DiffusionPipe
 
         prompt_embeds = self.text_encoder_2(text_input_ids.to(self.device))[0]
 
-        dtype = self.text_encoder_2.dtype
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=self.device)
+        prompt_embeds = prompt_embeds.to(dtype=self.od_config.dtype, device=self.device)
 
         _, seq_len, _ = prompt_embeds.shape
 
@@ -280,7 +279,7 @@ class FluxPipeline(nn.Module, FluxPipelineMixin, CFGParallelMixin, DiffusionPipe
 
         # Use pooled output of CLIPTextModel
         prompt_embeds = prompt_embeds.pooler_output
-        prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=self.device)
+        prompt_embeds = prompt_embeds.to(dtype=self.od_config.dtype, device=self.device)
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt)
@@ -332,8 +331,9 @@ class FluxPipeline(nn.Module, FluxPipelineMixin, CFGParallelMixin, DiffusionPipe
                 max_sequence_length=max_sequence_length,
             )
 
-        dtype = self.text_encoder.dtype if self.text_encoder is not None else self.transformer.dtype
-        text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(device=self.device, dtype=dtype)
+        prompt_embeds = prompt_embeds.to(dtype=self.od_config.dtype, device=self.device)
+        pooled_prompt_embeds = pooled_prompt_embeds.to(dtype=self.od_config.dtype, device=self.device)
+        text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(device=self.device, dtype=self.od_config.dtype)
 
         return prompt_embeds, pooled_prompt_embeds, text_ids
 
@@ -656,6 +656,7 @@ class FluxPipeline(nn.Module, FluxPipelineMixin, CFGParallelMixin, DiffusionPipe
             image = latents
         else:
             latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
+            latents = latents.to(self.vae.dtype)
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
             image = self.vae.decode(latents, return_dict=False)[0]
 
