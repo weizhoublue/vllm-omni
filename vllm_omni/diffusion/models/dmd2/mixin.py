@@ -30,7 +30,7 @@ class DMD2PipelineMixin:
 
         self.scheduler = DMD2EulerScheduler(
             num_train_timesteps=1000,
-            shift=1.0,
+            shift=self.dmd2_config.scheduler_shift,
             dmd2_timesteps=self.dmd2_config.resolve_timesteps(),
             stochastic_sampling=(self.dmd2_config.solver == "sde"),
         )

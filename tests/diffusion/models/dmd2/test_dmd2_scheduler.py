@@ -29,7 +29,7 @@ _DMD2_BASE = {
 }
 
 
-def _make_pipeline(cls):
+def _make_pipeline(cls, model_index=None):
     """Run the DMD2 __init__ (including __init_dmd2__) with the base pipeline mocked."""
 
     base = _DMD2_BASE[cls]
@@ -39,7 +39,11 @@ def _make_pipeline(cls):
     def _mock_base_init(self, *a, **kw):
         self.od_config = od_config  # __init_dmd2__ needs this
 
-    with patch.object(base, "__init__", _mock_base_init):
+    load_json_patch = patch(
+        "vllm_omni.diffusion.models.dmd2.mixin._load_json",
+        return_value=model_index or {},
+    )
+    with patch.object(base, "__init__", _mock_base_init), load_json_patch:
         pipeline = object.__new__(cls)
         torch.nn.Module.__init__(pipeline)
         cls.__init__(pipeline, od_config=od_config)
@@ -106,6 +110,30 @@ def test_sde_solver_plumbed_to_scheduler():
         stochastic_sampling=(cfg.solver == "sde"),
     )
     assert scheduler.config.stochastic_sampling is True
+
+
+def test_scheduler_shift_read_from_nested_dmd2_config():
+    from vllm_omni.diffusion.models.dmd2 import DMD2Config
+
+    cfg = DMD2Config.from_model_index({"dmd2_config": {"scheduler_shift": 3.0}})
+    assert cfg.scheduler_shift == 3.0
+
+
+def test_scheduler_shift_falls_back_to_flat_model_index_key():
+    from vllm_omni.diffusion.models.dmd2 import DMD2Config
+
+    cfg = DMD2Config.from_model_index({"dmd2_scheduler_shift": 5.0})
+    assert cfg.scheduler_shift == 5.0
+
+
+def test_nested_scheduler_shift_plumbed_to_scheduler():
+    pipeline = _make_pipeline(WanT2VDMD2Pipeline, {"dmd2_config": {"scheduler_shift": 7.0}})
+    assert pipeline.scheduler.config.shift == 7.0
+
+
+def test_flat_scheduler_shift_plumbed_to_scheduler():
+    pipeline = _make_pipeline(WanT2VDMD2Pipeline, {"dmd2_scheduler_shift": 9.0})
+    assert pipeline.scheduler.config.shift == 9.0
 
 
 def test_solver_case_insensitive():

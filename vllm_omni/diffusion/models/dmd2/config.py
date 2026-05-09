@@ -19,6 +19,7 @@ class DMD2Config:
     denoising_timesteps: list[int] | None = None
     solver: Solver = "ode"
     guidance_scale: float = 1.0
+    scheduler_shift: float = 1.0
 
     def __post_init__(self) -> None:
         if self.solver not in get_args(Solver):
@@ -36,6 +37,10 @@ class DMD2Config:
             denoising_timesteps=block.get("denoising_timesteps"),
             solver=solver,
             guidance_scale=block.get("guidance_scale", cls.guidance_scale),
+            scheduler_shift=block.get(
+                "scheduler_shift",
+                model_index.get("dmd2_scheduler_shift", cls.scheduler_shift),
+            ),
         )
 
     def resolve_timesteps(self) -> list[int]:
