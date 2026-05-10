@@ -297,6 +297,57 @@ def test_flash_attn_func_preferred_over_varlen():
     print("✓ flash_attn_func forward works correctly!")
 
 
+def test_forward_xpu_uses_piecewise_attention_for_full_attn_spans(monkeypatch):
+    num_heads, head_dim = 2, 16
+    fa_impl = FlashAttentionImpl(
+        num_heads=num_heads,
+        head_size=head_dim,
+        softmax_scale=1.0 / (head_dim**0.5),
+        causal=True,
+    )
+
+    query = torch.zeros(1, 4, num_heads, head_dim)
+    key = query.clone()
+    value = query.clone()
+    attn_mask = torch.ones(1, 1, 4, 4, dtype=torch.bool)
+    attn_mask[:, :, 2:, 3:] = False
+    attn_metadata = AttentionMetadata(
+        attn_mask=attn_mask,
+        full_attn_spans=[[(1, 3)]],
+    )
+
+    calls = []
+
+    def fake_flash_attn_varlen_func(
+        q,
+        k,
+        v,
+        *,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        causal,
+        softmax_scale,
+    ):
+        calls.append((max_seqlen_q, max_seqlen_k, causal))
+        return torch.full_like(q, 1.0 if causal else 2.0)
+
+    monkeypatch.setattr(fa, "HAS_FLASH_ATTN", True)
+    monkeypatch.setattr(fa, "flash_attn_varlen_func", fake_flash_attn_varlen_func)
+
+    output = fa_impl.forward_xpu(query, key, value, attn_metadata)
+
+    assert calls == [
+        (1, 1, True),
+        (2, 3, False),
+        (1, 4, True),
+    ]
+    assert output[:, 0].eq(1.0).all()
+    assert output[:, 1:3].eq(2.0).all()
+    assert output[:, 3].eq(1.0).all()
+
+
 if __name__ == "__main__":
     print("Running FlashAttention Padding Tests...")
     print("=" * 60)

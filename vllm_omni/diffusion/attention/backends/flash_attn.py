@@ -108,6 +108,8 @@ class FlashAttentionImpl(AttentionImpl):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
+        causal: bool | None = None,
+        softmax_scale: float | None = None,
     ) -> torch.Tensor:
         """Common wrapper for calling flash_attn_varlen_func for XPU and CUDA in vLLM.
 
@@ -122,7 +124,9 @@ class FlashAttentionImpl(AttentionImpl):
         )
 
         batch_size, q_len = query.size()[:2]
-        cu_seqlens = torch.arange(0, (batch_size + 1) * q_len, step=q_len, dtype=torch.int32, device=query.device)
+        k_len = key.size(1)
+        cu_seqlens_q = torch.arange(0, (batch_size + 1) * q_len, step=q_len, dtype=torch.int32, device=query.device)
+        cu_seqlens_k = torch.arange(0, (batch_size + 1) * k_len, step=k_len, dtype=torch.int32, device=query.device)
         # b s ... -> (b s) ...
         query = query.flatten(0, 1)
         key = key.flatten(0, 1)
@@ -132,12 +136,12 @@ class FlashAttentionImpl(AttentionImpl):
             q=query,
             k=key,
             v=value,
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_k=cu_seqlens,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=q_len,
-            max_seqlen_k=q_len,
-            causal=self.causal,
-            softmax_scale=self.softmax_scale,
+            max_seqlen_k=k_len,
+            causal=self.causal if causal is None else causal,
+            softmax_scale=self.softmax_scale if softmax_scale is None else softmax_scale,
         )
         out = self._unwrap_flash_output(out)
         # (b s) h d -> b s h d
@@ -227,6 +231,18 @@ class FlashAttentionImpl(AttentionImpl):
             )
 
         attention_mask = attn_metadata.attn_mask if attn_metadata is not None else None
+        full_attn_spans = attn_metadata.full_attn_spans if attn_metadata is not None else None
+
+        if full_attn_spans is not None:
+            logger.debug("Using piecewise XPU Flash Attention for mixed causal/full mask")
+            return piecewise_attn(
+                query,
+                key,
+                value,
+                full_attn_spans,
+                self.softmax_scale,
+                self._forward_varlen_dense,
+            )
 
         if attention_mask is not None and torch.any(~attention_mask):
             return self._forward_varlen_masked(
