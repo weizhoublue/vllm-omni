@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
+_RING_FLASH_BACKENDS = {"flash", "flash_attn", "fa", "fa2", "fa3"}
+_RING_SDPA_BACKENDS = {"sdpa", "torch", "torch_sdpa"}
+
 
 @dataclass(frozen=True, slots=True)
 class _RingCtx(ParallelAttentionContext):
@@ -109,6 +112,11 @@ class RingParallelAttention:
         backend_pref = self.attn_backend_pref
         if backend_pref is not None:
             backend_pref = backend_pref.lower()
+            if backend_pref not in _RING_FLASH_BACKENDS | _RING_SDPA_BACKENDS:
+                raise ValueError(
+                    f"{self.attn_backend_pref} does not support ring attention. "
+                    "Supported ring attention backends are FLASH_ATTN and TORCH_SDPA."
+                )
 
         # Determine attention type with fallback chain: FA3 -> FA2 -> SDPA
         # FP32 is not supported by Flash Attention, force SDPA
@@ -128,7 +136,7 @@ class RingParallelAttention:
             if attn_metadata.joint_strategy is not None:
                 joint_strategy = attn_metadata.joint_strategy
 
-        if backend_pref in {"sdpa", "torch", "torch_sdpa"}:
+        if backend_pref in _RING_SDPA_BACKENDS:
             from vllm_omni.diffusion.attention.backends.ring_pytorch_attn import ring_pytorch_attn_func
 
             return ring_pytorch_attn_func(
