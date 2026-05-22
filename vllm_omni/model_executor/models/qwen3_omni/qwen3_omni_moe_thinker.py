@@ -1089,9 +1089,24 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(
             "k_proj",
             "v_proj",
         ],
+        "attn.qkv": [
+            "attn.q",
+            "attn.k",
+            "attn.v",
+        ],
         "gate_up_proj": [
             "gate_proj",
             "up_proj",
+        ],
+        "attn_qkv_proj": [
+            "attn_q_proj",
+            "attn_k_proj",
+            "attn_v_proj",
+        ],
+        "qkv": [
+            "q",
+            "k",
+            "v",
         ],
     }
 
