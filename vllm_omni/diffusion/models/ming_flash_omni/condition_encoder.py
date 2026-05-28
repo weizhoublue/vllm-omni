@@ -195,26 +195,21 @@ class MingConditionEncoder(nn.Module):
         condition path to be meaningful.
         """
         if not mlp_path.exists():
-            logger.warning(
-                "[MingConditionEncoder] mlp/ subfolder missing at %s — proj/norm "
-                "will stay randomly initialized. EXPECT BAD IMAGES until this "
-                "is fixed on real hardware.",
-                mlp_path,
+            raise FileNotFoundError(
+                f"[MingConditionEncoder] mlp/ subfolder missing at {mlp_path}. "
+                "This is required for the condition path to be meaningful."
             )
-            return
 
         try:
             from safetensors.torch import load_file  # type: ignore
-        except ImportError:
-            logger.exception("[MingConditionEncoder] safetensors not installed")
-            return
+        except ImportError as e:
+            raise ImportError("[MingConditionEncoder] safetensors not installed") from e
 
         candidates = sorted(mlp_path.glob("*.safetensors"))
         if not candidates:
             candidates = sorted(mlp_path.glob("*.bin"))
         if not candidates:
-            logger.warning("[MingConditionEncoder] no weight files under %s", mlp_path)
-            return
+            raise FileNotFoundError(f"[MingConditionEncoder] no weight files under {mlp_path}")
 
         state: dict[str, torch.Tensor] = {}
         for p in candidates:
@@ -258,8 +253,8 @@ class MingConditionEncoder(nn.Module):
         ok_ow = _copy(self.proj_out.weight, "proj_out.weight")
         ok_ob = _copy(self.proj_out.bias, "proj_out.bias")
         if not (ok_w and ok_b and ok_ow and ok_ob):
-            logger.error(
-                "[MingConditionEncoder] proj_in/proj_out NOT fully loaded; diffusion conditioning will be garbage."
+            raise ValueError(
+                "[MingConditionEncoder] proj_in/proj_out NOT fully loaded; missing key or shape mismatch in checkpoint."
             )
 
         # Optional norm weight (Ming uses plain RMSNorm; may or may not ship).
