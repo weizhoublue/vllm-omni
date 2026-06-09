@@ -287,7 +287,7 @@ class HiggsAudioV3TalkerForConditionalGeneration(nn.Module):
 
         # Audio feedback: replace continuation token embeddings with audio
         # embeddings from the last decoded frame (CUDA-graph safe).
-        if input_ids is not None and inputs_embeds is None:
+        if input_ids is not None and not is_prefill:
             hidden_states = self._apply_audio_feedback(hidden_states, input_ids)
 
         residual: torch.Tensor | None = None
@@ -308,7 +308,7 @@ class HiggsAudioV3TalkerForConditionalGeneration(nn.Module):
         if input_ids is not None and (input_ids < 0).any():
             safe_ids = torch.where(input_ids < 0, torch.zeros_like(input_ids), input_ids)
         text_embed = self.model.embed_tokens(safe_ids)
-        return self._apply_audio_feedback(text_embed, input_ids)
+        return text_embed
 
     # ------------------------------------------------------------------ ref audio substitution
     def _apply_ref_audio_substitution(
@@ -469,6 +469,7 @@ class HiggsAudioV3TalkerForConditionalGeneration(nn.Module):
                     # Fresh request reusing this slot — clear stale state
                     self._audio_state.pop(i, None)
                     self._slot_output_len[i] = 0
+                    self._decode_has_codes[i] = False
                 self._slot_output_len[i] = cur_len
 
         # Bias LM logits for audio continuation
