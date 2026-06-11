@@ -1740,6 +1740,7 @@ class Bagel(nn.Module):
                 return_trajectory_latents=return_trajectory_latents,
                 scheduler=scheduler,
                 scheduler_kwargs=scheduler_kwargs,
+                frame_condition_token_indexes=frame_condition_token_indexes,
             )
 
         # ── SP + CFG: sequential single-branch forwards ──
@@ -1805,6 +1806,8 @@ class Bagel(nn.Module):
                         trajectory_log_probs.append(out.log_prob)
                 else:
                     x_t = x_t - v_t.to(x_t.device) * dts[i]
+                if pinned_x_t is not None:
+                    x_t[frame_condition_token_indexes] = pinned_x_t
                 if return_trajectory_latents:
                     trajectory_latents.append(x_t.clone())
                     trajectory_timesteps.append(timesteps[i])
@@ -1843,6 +1846,8 @@ class Bagel(nn.Module):
                         trajectory_log_probs.append(out_log_prob)
                 else:
                     x_t = x_t - v_t.to(x_t.device) * dts[i]
+                if pinned_x_t is not None:
+                    x_t[frame_condition_token_indexes] = pinned_x_t
                 if return_trajectory_latents:
                     trajectory_latents.append(x_t.clone())
                     trajectory_timesteps.append(timesteps[i])
@@ -1905,12 +1910,12 @@ class Bagel(nn.Module):
                     trajectory_log_probs.append(out.log_prob)
             else:
                 x_t = x_t - v_t.to(x_t.device) * dts[i]  # velocity pointing from data to noise
-                if pinned_x_t is not None:
-                    # i2v: restore cond positions to their encoded-image
-                    # latent.  Matches upstream PR #33 lance.py line 1712:
-                    #     x_t[mse_indexes] = x_t[mse_indexes] - v_t[mse_indexes] * dts[i]
-                    # (cond positions are excluded from the update).
-                    x_t[frame_condition_token_indexes] = pinned_x_t
+            if pinned_x_t is not None:
+                # i2v: restore cond positions to their encoded-image
+                # latent.  Matches upstream PR #33 lance.py line 1712:
+                #     x_t[mse_indexes] = x_t[mse_indexes] - v_t[mse_indexes] * dts[i]
+                # (cond positions are excluded from the update).
+                x_t[frame_condition_token_indexes] = pinned_x_t
             if return_trajectory_latents:
                 trajectory_latents.append(x_t.clone())
                 trajectory_timesteps.append(timesteps[i])
@@ -1973,6 +1978,11 @@ class Bagel(nn.Module):
         # across ranks when no per-request seed is set).
         x_t = x_t.contiguous()
         cfg_group.broadcast(x_t, src=0)
+
+        pinned_x_t = None
+        if frame_condition_token_indexes is not None:
+            frame_condition_token_indexes = frame_condition_token_indexes.to(x_t.device).long()
+            pinned_x_t = x_t[frame_condition_token_indexes].clone()
 
         # Select this rank's branch inputs
         if cfg_rank == 0:
@@ -2055,6 +2065,8 @@ class Bagel(nn.Module):
                     trajectory_log_probs.append(out.log_prob)
             else:
                 x_t = x_t - v_t.to(x_t.device) * dts[i]
+            if pinned_x_t is not None:
+                x_t[frame_condition_token_indexes] = pinned_x_t
             if return_trajectory_latents:
                 trajectory_latents.append(x_t.clone())
                 trajectory_timesteps.append(timesteps[i])
